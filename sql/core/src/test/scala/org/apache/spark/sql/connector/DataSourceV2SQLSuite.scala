@@ -139,6 +139,10 @@ class DataSourceV2SQLSuiteV1Filter
     v2Catalog.loadTable(Identifier.of(namespace, nameParts.last))
   }
 
+  private def assertCurrentCatalog(expectedName: String): Unit = {
+    assert(spark.sessionState.catalogManager.currentCatalog.name() == expectedName)
+  }
+
   test("CreateTable: use v2 plan because catalog is set") {
     spark.sql("CREATE TABLE testcat.table_name (id bigint NOT NULL, data string) USING foo")
 
@@ -2982,20 +2986,19 @@ class DataSourceV2SQLSuiteV1Filter
     registerCatalog("testcat3", classOf[InMemoryCatalog])
     registerCatalog("testcat4", classOf[InMemoryCatalog])
 
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
     sql("SET CATALOG testcat")
-    assert(catalogManager.currentCatalog.name() == "testcat")
+    assertCurrentCatalog("testcat")
 
     sql("SET CATALOG testcat2")
-    assert(catalogManager.currentCatalog.name() == "testcat2")
+    assertCurrentCatalog("testcat2")
 
     sql("SET CATALOG 'testcat3'")
-    assert(catalogManager.currentCatalog.name() == "testcat3")
+    assertCurrentCatalog("testcat3")
 
     sql("SET CATALOG \"testcat4\"")
-    assert(catalogManager.currentCatalog.name() == "testcat4")
+    assertCurrentCatalog("testcat4")
 
     checkError(
       exception = intercept[CatalogNotFoundException] {
@@ -3008,14 +3011,13 @@ class DataSourceV2SQLSuiteV1Filter
   }
 
   test("SPARK-49757: SET CATALOG statement with IDENTIFIER should work") {
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
     sql("SET CATALOG IDENTIFIER('testcat')")
-    assert(catalogManager.currentCatalog.name() == "testcat")
+    assertCurrentCatalog("testcat")
 
     spark.sql("SET CATALOG IDENTIFIER(:param)", Map("param" -> "testcat2"))
-    assert(catalogManager.currentCatalog.name() == "testcat2")
+    assertCurrentCatalog("testcat2")
 
     checkError(
       exception = intercept[CatalogNotFoundException] {
@@ -3029,40 +3031,32 @@ class DataSourceV2SQLSuiteV1Filter
   }
 
   test("SPARK-49757: SET CATALOG statement with IDENTIFIER with multipart name should fail") {
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
-    val sqlText = "SET CATALOG IDENTIFIER(:param)"
     checkError(
-      exception = intercept[ParseException] {
-        spark.sql(sqlText, Map("param" -> "testcat.ns1"))
+      exception = intercept[AnalysisException] {
+        spark.sql("SET CATALOG IDENTIFIER(:param)", Map("param" -> "testcat.ns1"))
       },
       condition = "INVALID_SQL_SYNTAX.MULTI_PART_NAME",
       parameters = Map(
         "name" -> "`testcat`.`ns1`",
         "statement" -> "SET CATALOG"
-      ),
-      context = ExpectedContext(
-        fragment = sqlText,
-        start = 0,
-        stop = 29)
+      )
     )
   }
 
   test("SPARK-55155: SET CATALOG statement with foldable expressions") {
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
     sql("SET CATALOG CAST(\"testcat\" AS STRING)")
-    assert(catalogManager.currentCatalog.name() == "testcat")
+    assertCurrentCatalog("testcat")
 
     sql("SET CATALOG CONCAT('test', 'cat2')")
-    assert(catalogManager.currentCatalog.name() == "testcat2")
+    assertCurrentCatalog("testcat2")
   }
 
   test("SPARK-55155: SET CATALOG statement is case-sensitive") {
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
     checkError(
       exception = intercept[CatalogNotFoundException] {
@@ -3099,8 +3093,7 @@ class DataSourceV2SQLSuiteV1Filter
   test("SPARK-55155: SET CATALOG with session temp variable") {
     registerCatalog("testcat3", classOf[InMemoryCatalog])
     registerCatalog("testcat4", classOf[InMemoryCatalog])
-    val catalogManager = spark.sessionState.catalogManager
-    assert(catalogManager.currentCatalog.name() == SESSION_CATALOG_NAME)
+    assertCurrentCatalog(SESSION_CATALOG_NAME)
 
     // Declare and set the session temp variable
     sql("DECLARE cat_name STRING DEFAULT 'testcat'")
@@ -3109,30 +3102,43 @@ class DataSourceV2SQLSuiteV1Filter
 
     // Using the session temp variable without IDENTIFIER()
     sql("SET CATALOG cat_name")
-    assert(catalogManager.currentCatalog.name() == "testcat")
+    assertCurrentCatalog("testcat")
     sql("SET CATALOG cat_name2")
-    assert(catalogManager.currentCatalog.name() == "testcat2")
+    assertCurrentCatalog("testcat2")
     // Using the session temp variable with IDENTIFIER()
     sql("SET CATALOG IDENTIFIER(cat_name)")
-    assert(catalogManager.currentCatalog.name() == "testcat")
+    assertCurrentCatalog("testcat")
     sql("SET CATALOG IDENTIFIER(cat_name2)")
-    assert(catalogManager.currentCatalog.name() == "testcat2")
+    assertCurrentCatalog("testcat2")
 
     // Fallback to literal when name is not a variable
     sql("SET CATALOG testcat3")
-    assert(catalogManager.currentCatalog.name() == "testcat3")
+    assertCurrentCatalog("testcat3")
     sql("SET CATALOG testcat4")
-    assert(catalogManager.currentCatalog.name() == "testcat4")
+    assertCurrentCatalog("testcat4")
   }
 
-  test("SPARK-55155: SET CATALOG with non-foldable expressions should fail") {
+  test("SPARK-55155: SET CATALOG with multipart identifiers should fail") {
     checkError(
       exception = intercept[AnalysisException] {
-        sql("SET CATALOG current_user()")
+        sql("SET CATALOG testcat.ns1")
       },
-      condition = "NOT_A_CONSTANT_STRING.NOT_CONSTANT",
-      parameters = Map("expr" -> "current_user()", "name" -> "IDENTIFIER"),
-      queryContext = Array(ExpectedContext(fragment = "current_user()", start = 12, stop = 25))
+      condition = "INVALID_SQL_SYNTAX.MULTI_PART_NAME",
+      parameters = Map(
+        "name" -> "`testcat`.`ns1`",
+        "statement" -> "SET CATALOG"
+      )
+    )
+  }
+
+  test("SPARK-55155: SET CATALOG with non-deterministic expressions should fail") {
+    checkError(
+      exception = intercept[AnalysisException] {
+        sql("SET CATALOG rand()")
+      },
+      condition = "INVALID_NON_DETERMINISTIC_EXPRESSIONS",
+      parameters = Map("sqlExprs" -> "\"rand()\""),
+      queryContext = Array(ExpectedContext(fragment = "rand()", start = 12, stop = 17))
     )
   }
 

@@ -1,0 +1,2 @@
+{"time":"2026-01-26T21:51:21.306727416Z","level":"INFO","msg":"No project file found","path":"/home/yuyuan.tang/spark/.bazelbsp/project.json"}
+{"time":"2026-01-26T21:51:21.321667828Z","level":"ERROR","msg":"failed to load project","error":"exit status 1"}
